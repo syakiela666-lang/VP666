@@ -334,20 +334,22 @@
         }
 
         cropOverlay.addEventListener('mousedown', startSelect);
-        cropOverlay.addEventListener('touchstart', (e) => startSelect(e.touches[0]), {passive:false});
+        cropOverlay.addEventListener('touchstart', startSelect, {passive:false});
         function startSelect(e) { 
             e.stopPropagation(); isSelecting = true; const rect = cropOverlay.getBoundingClientRect(); 
-            cropStart.x = e.clientX - rect.left; cropStart.y = e.clientY - rect.top; 
+            const evt = e.touches ? e.touches[0] : e;
+            cropStart.x = evt.clientX - rect.left; cropStart.y = evt.clientY - rect.top; 
             selectionBox.style.left=cropStart.x+'px'; selectionBox.style.top=cropStart.y+'px'; 
             selectionBox.style.width='0'; selectionBox.style.height='0'; selectionBox.style.display='block'; 
         }
         cropOverlay.addEventListener('mousemove', moveSelect);
-        cropOverlay.addEventListener('touchmove', (e) => { e.preventDefault(); moveSelect(e.touches[0]); }, {passive:false});
+        cropOverlay.addEventListener('touchmove', (e) => { e.preventDefault(); moveSelect(e); }, {passive:false});
         
         function moveSelect(e) { 
             if(!isSelecting) return; 
-            const currX = e.clientX - cropOverlay.getBoundingClientRect().left; 
-            const currY = e.clientY - cropOverlay.getBoundingClientRect().top; 
+            const evt = e.touches ? e.touches[0] : e;
+            const currX = evt.clientX - cropOverlay.getBoundingClientRect().left; 
+            const currY = evt.clientY - cropOverlay.getBoundingClientRect().top; 
             let w = currX - cropStart.x; let h = currY - cropStart.y; 
             
             if (cropAspect !== null) {
@@ -442,8 +444,19 @@
 
         // --- UTILS ---
         async function togglePiP() {
-            if (document.pictureInPictureElement) await document.exitPictureInPicture();
-            else if (document.pictureInPictureEnabled && video.readyState >= 2) await video.requestPictureInPicture();
+            try {
+                if (document.pictureInPictureElement) {
+                    await document.exitPictureInPicture();
+                } else if (document.pictureInPictureEnabled && video.readyState >= 2) {
+                    await video.requestPictureInPicture();
+                } else if (video.webkitSupportsPresentationMode && typeof video.webkitSetPresentationMode === "function") {
+                    video.webkitSetPresentationMode(video.webkitPresentationMode === "picture-in-picture" ? "inline" : "picture-in-picture");
+                } else {
+                    showOSD("PiP UNSUPPORTED");
+                }
+            } catch (err) {
+                showOSD("PiP BLOCKED");
+            }
         }
         async function requestWakeLock() { try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (err) { } }
         function toggleFullscreen() { 
