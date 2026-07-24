@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="theme-color" content="#111111">
+    <link rel="manifest" href="manifest.json">
+    <link rel="apple-touch-icon" href="icon-192.png">
+    <title>VID PLAYER V14 (DEAD CENTER)</title>
+    <style>
+        :root { --bg: #000; --panel: #111; --accent: #ff0055; --cyan: #00ffcc; --text: #ccc; --btn-bg: #222; }
+        * { box-sizing: border-box; outline: none; user-select: none; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+        
+        body { 
+            background: var(--bg); color: var(--text); font-family: 'Segoe UI', monospace; 
+            height: 100dvh; width: 100dvw; overflow: hidden; display: flex; flex-direction: column; 
+        }
+
+        #viewport {
+            flex: 1; position: relative; background: #000;
+            display: flex; justify-content: center; align-items: center; 
+            width: 100%; overflow: hidden; touch-action: none; 
+        }
+
+        video { 
+            width: 100%; height: 100%; object-fit: contain; 
+            /* Origin akan di-override oleh JS saat cropping */
+            transform-origin: center center; 
+            will-change: transform, clip-path; 
+            /* Transisi halus saat reset, tapi instant saat drag */
+            transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+        }
+        video.no-anim { transition: none !important; }
+
+        /* UI ELEMENTS */
+        #placeholder { 
+            position: absolute; top:0; left:0; width:100%; height:100%;
+            display: flex; flex-direction: column; justify-content: center; align-items: center;
+            color: #444; pointer-events: none; z-index: 10; background: #000;
+        }
+        #placeholder h1 { font-size: 3em; margin: 0; color: #222; }
+
+        #loader {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 50px; height: 50px; border: 5px solid #333; border-top: 5px solid var(--cyan);
+            border-radius: 50%; animation: spin 1s linear infinite; display: none; z-index: 80; pointer-events: none;
+        }
+        @keyframes spin { 0% { transform: translate(-50%, -50%) rotate(0deg); } 100% { transform: translate(-50%, -50%) rotate(360deg); } }
+
+        #osd { position: absolute; top: 5%; right: 20px; background: rgba(0, 0, 0, 0.8); color: var(--cyan); padding: 5px 15px; border-radius: 4px; font-size: 1.2em; font-weight: bold; pointer-events: none; opacity: 0; transition: opacity 0.3s; z-index: 200; border: 1px solid var(--cyan); }
+        #osd.show { opacity: 1; }
+
+        #dropOverlay { position: absolute; top:0; left:0; width:100%; height:100%; background: rgba(255, 0, 85, 0.2); border: 4px dashed var(--accent); display: flex; justify-content: center; align-items: center; font-size: 2em; font-weight: bold; color: white; opacity: 0; pointer-events: none; z-index: 99; transition: 0.2s; }
+        #dropOverlay.active { opacity: 1; }
+
+        /* CROP OVERLAY */
+        #cropOverlay { position: absolute; top:0; left:0; width:100%; height:100%; z-index: 90; cursor: crosshair; display: none; background: rgba(0,0,0,0.3); }
+        #selectionBox { position: absolute; border: 2px dashed var(--accent); box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.7); pointer-events: none; display: none; }
+        .isolate-menu { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); display: flex; gap: 5px; pointer-events: auto; }
+        .ratio-btn { background: rgba(0,0,0,0.6); border: 1px solid #555; color: #ccc; padding: 4px 10px; border-radius: 4px; cursor: pointer; font-size: 0.8em; font-weight: bold; }
+        .ratio-btn.active { background: var(--accent); color: white; border-color: var(--accent); }
+
+        /* GESTURES */
+        .ripple-zone { position: absolute; top: 0; height: 100%; width: 20%; z-index: 70; display: flex; align-items: center; justify-content: center; opacity: 0; transition: opacity 0.3s; pointer-events: none; font-size: 2em; color: white; font-weight: bold; text-shadow: 0 0 10px black; }
+        .ripple-left { left: 0; background: linear-gradient(90deg, rgba(255,255,255,0.1), transparent); }
+        .ripple-right { right: 0; background: linear-gradient(-90deg, rgba(255,255,255,0.1), transparent); }
+        .ripple-zone.active { opacity: 1; }
+
+        #hoverTime { position: absolute; bottom: 100%; left: 0; background: rgba(0,0,0,0.8); color: white; padding: 2px 5px; border-radius: 3px; font-size: 0.7em; pointer-events: none; display: none; transform: translateX(-50%); white-space: nowrap; border: 1px solid #444; margin-bottom: 5px; z-index: 20; }
+
+        /* PANEL */
+        #controls { height: auto; min-height: 140px; background: var(--panel); display: flex; flex-direction: column; z-index: 150; width: 100%; border-top: 1px solid #222; padding-bottom: 5px; flex-shrink: 0; transition: transform 0.3s ease, opacity 0.3s ease; }
+        body.is-fullscreen { height: 100%; width: 100%; }
+        body.is-fullscreen #controls { position: fixed; bottom: 0; left: 0; width: 100%; background: rgba(15, 15, 15, 0.90); backdrop-filter: blur(5px); padding-bottom: 15px; border-top: none; }
+        body.is-fullscreen #viewport { height: 100%; width: 100%; }
+        body.is-fullscreen.user-inactive { cursor: none; }
+        body.is-fullscreen.user-inactive #controls { opacity: 0; pointer-events: none; transform: translateY(100%); }
+
+        .timeline-area { position: relative; background: rgba(30, 30, 30, 0.3); padding: 0 10px; display: flex; align-items: center; gap: 10px; height: 45px; border-bottom: 1px solid #222; flex-shrink: 0; }
+        .play-btn-wide { width: 50px; height: 32px; background: #333; border: 1px solid #444; color: #fff; border-radius: 4px; cursor: pointer; display: flex; align-items: center; justify-content: center; font-size: 1.2em; }
+        .time-display { font-size: 0.8em; color: var(--cyan); min-width: 60px; text-align: center; font-variant-numeric: tabular-nums; }
+        
+        input[type=range].scrubber { flex: 1; height: 4px; -webkit-appearance: none; background: #333; cursor: pointer; position: relative; z-index: 10; border-radius: 2px; background-image: linear-gradient(var(--accent), var(--accent)); background-size: 0% 100%; background-repeat: no-repeat; }
+        input[type=range].scrubber::-webkit-slider-thumb { -webkit-appearance: none; height: 18px; width: 18px; background: #fff; border-radius: 50%; box-shadow: 0 0 5px rgba(0,0,0,0.5); transition: transform 0.1s; }
+        input[type=range].scrubber:hover::-webkit-slider-thumb { transform: scale(1.3); }
+
+        .dashboard { flex: 1; display: grid; grid-template-columns: 1.5fr 1fr; padding: 5px 8px; gap: 8px; overflow: hidden; align-items: start; } 
+        .module { display: flex; flex-direction: column; gap: 2px; border-right: 1px solid #222; padding-right: 5px; height: 100%; }
+        .module:last-child { border: none; padding-right: 0; }
+        .module-title { color: #555; font-size: 0.6em; font-weight: bold; text-transform: uppercase; margin-bottom: 2px; display: flex; align-items: center; gap: 3px; }
+        .module-title::before { content: ''; display: inline-block; width: 3px; height: 8px; background: var(--accent); border-radius: 1px; }
+
+        .grid-buttons { display: grid; grid-template-columns: 1fr 1fr; gap: 4px; }
+        .grid-buttons-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; }
+        .btn { background: var(--btn-bg); color: #aaa; border: 1px solid #333; padding: 0; height: 32px; border-radius: 4px; cursor: pointer; font-size: 0.85em; display: flex; align-items: center; justify-content: center; }
+        .btn:hover { background: #333; color: white; border-color: #555; }
+        .btn.active { background: var(--cyan); color: black; font-weight: bold; }
+        .btn-reset { background: rgba(50, 20, 20, 0.3); color: #aa5555; border: 1px solid #331111; height: 24px; font-size: 0.7em; width: 100%; border-radius: 4px; cursor: pointer; margin-top: auto; }
+
+        .slider-stack { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
+        .slider-row { display: flex; justify-content: space-between; align-items: center; font-size: 0.75em; color: #666; height: 32px; }
+        input[type=range].tweak { width: 65%; height: 3px; accent-color: var(--cyan); cursor: pointer; background: #333; border-radius: 1px; }
+        
+        input[type="file"] { display: none !important; }
+        .marker { position: absolute; top: 0; height: 100%; width: 2px; pointer-events: none; display: none; z-index: 5; }
+        #markA { background-color: var(--cyan); box-shadow: 0 0 5px var(--cyan); }
+        #markB { background-color: var(--accent); box-shadow: 0 0 5px var(--accent); }
+        #loopHighlight { position: absolute; top: 13px; height: 4px; background: rgba(255, 0, 85, 0.4); pointer-events: none; display: none; z-index: 4; }
+    </style>
+</head>
+<body ondrop="dropHandler(event)" ondragover="dragOverHandler(event)" ondragleave="dragLeaveHandler(event)">
+
+    <div id="viewport">
+        <div id="placeholder"><h1>🎬</h1><p>DROP FILE</p></div>
+        <div id="loader"></div>
+        <div id="osd">READY</div>
+        <div id="dropOverlay">LEPASIN BEB! 📂</div>
+        
+        <div class="ripple-zone ripple-left" id="ripL">⏪</div>
+        <div class="ripple-zone ripple-right" id="ripR">⏩</div>
+
+        <div id="cropOverlay">
+            <div class="isolate-menu">
+                <button class="ratio-btn active" onclick="setRatio(null, this)">Free</button>
+                <button class="ratio-btn" onclick="setRatio(16/9, this)">16:9</button>
+                <button class="ratio-btn" onclick="setRatio(9/16, this)">9:16</button>
+            </div>
+            <div id="selectionBox"></div>
+        </div>
+
+        <video id="player" playsinline></video>
+    </div>
+
+    <div id="controls">
+        <div class="timeline-area" id="timelineArea">
+            <button class="play-btn-wide" onclick="togglePlay()" id="playBtn">▶</button>
+            <span class="time-display" id="timeCurr">00:00</span>
+            <div style="flex:1; height:100%; display:flex; align-items:center; position:relative;">
+                <input type="range" class="scrubber" id="progressBar" value="0" min="0" step="0.01" oninput="seekVideo(this.value)">
+                <div id="hoverTime">00:00</div>
+                <div id="markA" class="marker"></div>
+                <div id="markB" class="marker"></div>
+                <div id="loopHighlight"></div>
+            </div>
+            <span class="time-display" id="timeDur" style="color:#666;">00:00</span>
+        </div>
+
+        <div class="dashboard">
+            <div class="module">
+                <div class="module-title">Main</div>
+                <div class="grid-buttons-4">
+                    <button class="btn" onclick="document.getElementById('fileInput').click()" title="Open">📂</button>
+                    <button class="btn" id="muteToggleBtn" onclick="toggleMute()" title="Mute Video">🔊 ON</button>
+                    <button class="btn" onclick="stepFrame(-0.04)" title="Prev"><</button>
+                    <button class="btn" onclick="stepFrame(0.04)" title="Next">></button>
+                </div>
+                <div class="grid-buttons-4" style="margin-top: 2px;">
+                    <button class="btn btn-a" id="btnA" onclick="setLoopA()">A</button>
+                    <button class="btn btn-b" id="btnB" onclick="setLoopB()">B</button>
+                    <button class="btn" onclick="clearLoop()">❌</button>
+                    <button class="btn" onclick="toggleFullscreen()" title="Full (F)">⛶</button>
+                </div>
+                <div class="slider-stack">
+                    <div class="slider-row">
+                        <span>Spd</span> 
+                        <div style="display:flex; gap:4px; flex:1; justify-content:flex-end; align-items:center;">
+                            <button class="btn" onclick="adjSpeed(-0.1)" style="width:36px;">-</button>
+                            <span id="txtSpd" style="width:36px; text-align:center; font-size:1.1em; font-family:monospace; color:var(--cyan);">1.0</span>
+                            <button class="btn" onclick="adjSpeed(0.1)" style="width:36px;">+</button>
+                        </div>
+                    </div>
+                    <div class="slider-row">
+                        <span>Vol</span> 
+                        <div style="display:flex; gap:4px; flex:1; justify-content:flex-end; align-items:center;">
+                            <button class="btn" onclick="adjVol(-0.1)" style="width:36px;">-</button>
+                            <span id="txtVol" style="width:36px; text-align:center; font-size:1.1em; font-family:monospace; color:var(--cyan);">100</span>
+                            <button class="btn" onclick="adjVol(0.1)" style="width:36px;">+</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="module">
+                <div class="module-title">Tools</div>
+                <div class="grid-buttons">
+                    <button class="btn" id="btnCrop" onclick="toggleCropMode()" title="True Crop">✂ CROP</button>
+                    <button class="btn" onclick="togglePiP()" title="PiP">🖼️ PiP</button>
+                    <button class="btn" onclick="resetTransform()" title="Reset">↺ RST</button>
+                    <button class="btn" onclick="updateTransform('rot', -90)">↺</button>
+                    <button class="btn" onclick="updateTransform('rot', 90)">↻</button>
+                    <button class="btn" onclick="updateTransform('flipH', -1)">↔</button>
+                    <button class="btn" onclick="updateTransform('flipV', -1)">↕</button>
+                    <button class="btn" id="extAudioBtn" onclick="document.getElementById('audioInput').click()" title="Load Ext Audio">🎵 AUD</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <input type="file" id="fileInput" accept="video/*" onchange="loadFile(this)" hidden style="display:none !important;">
+    <input type="file" id="audioInput" accept="audio/*" onchange="loadExtAudio(this)" hidden style="display:none !important;">
+    <audio id="extAudio" style="display:none"></audio>
+
+    <script>
+        const video = document.getElementById('player');
+        const viewport = document.getElementById('viewport');
+        const pBar = document.getElementById('progressBar');
+        const hoverTime = document.getElementById('hoverTime');
+        const osd = document.getElementById('osd');
+        const cropOverlay = document.getElementById('cropOverlay');
+        const selectionBox = document.getElementById('selectionBox');
+        const loader = document.getElementById('loader');
+        const extAudio = document.getElementById('extAudio');
+        
+        // Sync external audio
+        video.addEventListener('play', () => { if(extAudio.src) extAudio.play(); });
+        video.addEventListener('pause', () => { if(extAudio.src) extAudio.pause(); });
+        video.addEventListener('seeked', () => { if(extAudio.src) extAudio.currentTime = video.currentTime; });
+        video.addEventListener('seeking', () => { if(extAudio.src) extAudio.currentTime = video.currentTime; });
+        video.addEventListener('ratechange', () => { if(extAudio.src) extAudio.playbackRate = video.playbackRate; });
+        
+        // State originX/Y sekarang menyimpan koordinat PIXEL bukan persen, untuk akurasi transform
+        let state = { rot: 0, flipH: 1, flipV: 1, zoom: 1, panX: 0, panY: 0, originX: '50%', originY: '50%', clip: 'none', cropMeta: null };
+        let osdTimer;
+        let loopA = null, loopB = null, isLooping = false;
+        let renderPending = false; 
+        let wakeLock = null;
+
+        // --- INIT ---
+        window.onload = () => {
+            try {
+                if(localStorage.getItem('vid_vol')) { const v = parseFloat(localStorage.getItem('vid_vol')); video.volume = v; document.getElementById('txtVol').innerText = Math.round(v*100); }
+                if(localStorage.getItem('vid_spd')) { const s = parseFloat(localStorage.getItem('vid_spd')); video.playbackRate = s; document.getElementById('txtSpd').innerText = s.toFixed(1); }
+            } catch(e) {}
+        };
+
+        // --- TIMELINE ---
+        function updateProgressBar() {
+            if(!video.duration) return;
+            const pct = (video.currentTime / video.duration) * 100;
+            pBar.style.backgroundSize = `${pct}% 100%`;
+            pBar.value = video.currentTime; 
+            document.getElementById('timeCurr').innerText = fmt(video.currentTime);
+        }
+        pBar.addEventListener('mousemove', (e) => {
+            if(!video.duration) return;
+            const rect = pBar.getBoundingClientRect();
+            const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+            hoverTime.style.display = 'block'; hoverTime.style.left = (e.clientX - rect.left) + 'px';
+            hoverTime.innerText = fmt(pct * video.duration);
+        });
+        pBar.addEventListener('mouseleave', () => { hoverTime.style.display = 'none'; });
+
+        // --- GESTURES ---
+        let touchStart = { x: 0, y: 0, d: 0 };
+        let startState = { zoom: 1, panX: 0, panY: 0 };
+        let isTouching = false; let isMoving = false; let lastTapTime = 0;
+
+        viewport.addEventListener('touchstart', (e) => {
+            if(cropMode) return;
+            isTouching = true; isMoving = false;
+            video.classList.add('no-anim'); 
+            if (e.touches.length === 1) {
+                touchStart.x = e.touches[0].clientX; touchStart.y = e.touches[0].clientY;
+                startState.panX = state.panX; startState.panY = state.panY;
+            } else if (e.touches.length === 2) {
+                touchStart.d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+                startState.zoom = state.zoom;
+            }
+        }, {passive: false});
+
+        viewport.addEventListener('touchmove', (e) => {
+            if(cropMode || !isTouching) return;
+            e.preventDefault();
+            if (e.touches.length === 1 && state.zoom > 1) { 
+                isMoving = true;
+                state.panX = startState.panX + (e.touches[0].clientX - touchStart.x);
+                state.panY = startState.panY + (e.touches[0].clientY - touchStart.y);
+                requestRender();
+            } else if (e.touches.length === 2) {
+                isMoving = true;
+                const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+                state.zoom = Math.max(1, startState.zoom * (dist / touchStart.d));
+                requestRender(); showOSD("ZOOM " + state.zoom.toFixed(1) + "x");
+            }
+        }, {passive: false});
+
+        viewport.addEventListener('touchend', (e) => {
+            if(cropMode) return; isTouching = false; video.classList.remove('no-anim');
+            if (!isMoving && e.changedTouches.length === 1) {
+                const now = new Date().getTime();
+                if (now - lastTapTime < 300) {
+                    const rect = viewport.getBoundingClientRect();
+                    if ((e.changedTouches[0].clientX - rect.left) < rect.width / 2) { seekRelative(-10); ripple('ripL'); } 
+                    else { seekRelative(10); ripple('ripR'); }
+                } else { setTimeout(() => { if (now === lastTapTime) togglePlay(); }, 350); }
+                lastTapTime = now;
+            }
+        });
+        
+        function seekRelative(sec) { video.currentTime += sec; showOSD(sec > 0 ? `⏩ +${sec}s` : `⏪ ${sec}s`); }
+        function ripple(id) { const el = document.getElementById(id); el.classList.add('active'); setTimeout(() => el.classList.remove('active'), 400); }
+        function requestRender() { if(!renderPending) { requestAnimationFrame(() => { applyVisuals(); renderPending = false; }); renderPending = true; } }
+
+
+
+        // --- TRUE CROP (THE DEAD CENTER FIX) ---
+        let cropMode = false; let cropStart = { x: 0, y: 0 }; let isSelecting = false;
+        let cropAspect = null; 
+
+        function toggleCropMode() {
+            cropMode = !cropMode;
+            if(cropMode) {
+                // Reset to neutral before crop to avoid confusion
+                if(state.rot !== 0 || state.zoom !== 1) { 
+                    resetTransform(); 
+                    setTimeout(() => { // Delay slightly to let reset animation finish visually
+                        cropOverlay.style.display = 'block'; video.pause(); 
+                        document.getElementById('btnCrop').classList.add('active'); showOSD("DRAW TO MASK");
+                    }, 200);
+                } else {
+                    cropOverlay.style.display = 'block'; video.pause(); 
+                    document.getElementById('btnCrop').classList.add('active'); showOSD("DRAW TO MASK");
+                }
+            } else {
+                cropOverlay.style.display = 'none'; selectionBox.style.display = 'none';
+                document.getElementById('btnCrop').classList.remove('active');
+            }
+        }
+        
+        function setRatio(r, btn) {
+            cropAspect = r;
+            document.querySelectorAll('.ratio-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        }
+
+        cropOverlay.addEventListener('mousedown', startSelect);
+        cropOverlay.addEventListener('touchstart', (e) => startSelect(e.touches[0]), {passive:false});
+        function startSelect(e) { 
+            e.stopPropagation(); isSelecting = true; const rect = cropOverlay.getBoundingClientRect(); 
+            cropStart.x = e.clientX - rect.left; cropStart.y = e.clientY - rect.top; 
+            selectionBox.style.left=cropStart.x+'px'; selectionBox.style.top=cropStart.y+'px'; 
+            selectionBox.style.width='0'; selectionBox.style.height='0'; selectionBox.style.display='block'; 
+        }
+        cropOverlay.addEventListener('mousemove', moveSelect);
+        cropOverlay.addEventListener('touchmove', (e) => { e.preventDefault(); moveSelect(e.touches[0]); }, {passive:false});
+        
+        function moveSelect(e) { 
+            if(!isSelecting) return; 
+            const currX = e.clientX - cropOverlay.getBoundingClientRect().left; 
+            const currY = e.clientY - cropOverlay.getBoundingClientRect().top; 
+            let w = currX - cropStart.x; let h = currY - cropStart.y; 
+            
+            if (cropAspect !== null) {
+                if (Math.abs(w / cropAspect) < Math.abs(h)) h = Math.sign(h) * Math.abs(w / cropAspect);
+                else w = Math.sign(w) * Math.abs(h * cropAspect);
+            }
+            selectionBox.style.width = Math.abs(w) + 'px'; selectionBox.style.height = Math.abs(h) + 'px'; 
+            selectionBox.style.left = (w < 0 ? cropStart.x + w : cropStart.x) + 'px'; 
+            selectionBox.style.top = (h < 0 ? cropStart.y + h : cropStart.y) + 'px'; 
+        }
+
+        cropOverlay.addEventListener('mouseup', endSelect);
+        cropOverlay.addEventListener('touchend', endSelect);
+        
+        function endSelect() {
+            if(!isSelecting) return; isSelecting = false;
+            const rect = viewport.getBoundingClientRect(); const box = selectionBox.getBoundingClientRect();
+            
+            if(box.width < 5 && box.height < 5) { showOSD("TOO SMALL"); return; } 
+            
+            const vRect = video.getBoundingClientRect();
+            
+            // 1. Clip Path (Masking)
+            const t = Math.max(0, (box.top - vRect.top) / vRect.height * 100);
+            const b = Math.max(0, (vRect.bottom - box.bottom) / vRect.height * 100);
+            const l = Math.max(0, (box.left - vRect.left) / vRect.width * 100);
+            const r = Math.max(0, (vRect.right - box.right) / vRect.width * 100);
+            state.clip = `inset(${t}% ${r}% ${b}% ${l}%)`;
+            
+            // 2. DEAD CENTER MATHEMATICS
+            // Find Center of Selection relative to the Element (Screen)
+            const boxCenterX = box.left + box.width / 2;
+            const boxCenterY = box.top + box.height / 2;
+            
+            // This point becomes our Transform Origin
+            state.originX = boxCenterX - rect.left; // x position in element
+            state.originY = boxCenterY - rect.top;  // y position in element
+            
+            // Calculate how much we need to move this Origin to get it to the Screen Center
+            const screenCenterX = rect.width / 2;
+            const screenCenterY = rect.height / 2;
+            
+            // Delta = Target - Current
+            // We set translation to this Delta so the Origin overlaps the Screen Center
+            state.panX = screenCenterX - state.originX;
+            state.panY = screenCenterY - state.originY;
+
+            // 3. Zoom Calculation
+            const newZoom = Math.min(rect.width / box.width, rect.height / box.height);
+            state.zoom = newZoom; // Reset Zoom to this new fit
+
+            // 4. Reset Rotation to 0 (Fresh Start for new crop)
+            state.rot = 0;
+
+            requestRender(); toggleCropMode(); video.play(); showOSD("LOCKED CENTER");
+        }
+
+        // --- VISUAL ENGINE ---
+        function applyVisuals() {
+            // Apply Dynamic Pivot
+            let ox = typeof state.originX === 'number' ? `${state.originX}px` : state.originX;
+            let oy = typeof state.originY === 'number' ? `${state.originY}px` : state.originY;
+            video.style.transformOrigin = `${ox} ${oy}`;
+            
+            let finalZoom = state.zoom; 
+            
+            // Auto-fit if rotated 90 or 270 degrees
+            if (Math.abs(state.rot % 180) === 90 && video.videoWidth) {
+                const vw = video.videoWidth;
+                const vh = video.videoHeight;
+                const cw = viewport.clientWidth || 1;
+                const ch = viewport.clientHeight || 1;
+                
+                const s0 = Math.min(cw / vw, ch / vh);       // Default scale by object-fit
+                const sRot = Math.min(cw / vh, ch / vw);     // Target scale for rotated bounds
+                
+                finalZoom *= (sRot / s0); 
+            }
+            
+            // Translate moves the Origin to the Center. Rotate spins around Origin. Scale expands from Origin.
+            video.style.transform = `translate(${state.panX}px, ${state.panY}px) rotate(${state.rot}deg) scale(${finalZoom}) scaleX(${state.flipH}) scaleY(${state.flipV})`;
+            video.style.clipPath = state.clip;
+        }
+
+        function updateTransform(t,v) { if(t==='rot') state.rot+=v; if(t==='flipH') state.flipH*=v; if(t==='flipV') state.flipV*=v; if(t==='zoom') state.zoom+=v; requestRender(); showOSD("GEO CHANGE"); }
+        function resetTransform() { 
+            state={...state, rot:0, flipH:1, flipV:1, zoom:1, panX:0, panY:0, originX:'50%', originY:'50%', clip:'none', cropMeta:null}; 
+            requestRender(); showOSD("RESET VIEW"); 
+        }
+        function updateColor(t,v) { state[t]=v; requestRender(); }
+        function resetColor() { state.bri=1; state.con=1; state.sat=1; requestRender(); }
+
+        // --- UTILS ---
+        async function togglePiP() {
+            if (document.pictureInPictureElement) await document.exitPictureInPicture();
+            else if (document.pictureInPictureEnabled && video.readyState >= 2) await video.requestPictureInPicture();
+        }
+        async function requestWakeLock() { try { if ('wakeLock' in navigator) wakeLock = await navigator.wakeLock.request('screen'); } catch (err) { } }
+        function toggleFullscreen() { 
+            const el = document.documentElement;
+            const isFull = document.fullscreenElement || document.webkitFullscreenElement;
+            if (!isFull) { 
+                if (el.requestFullscreen) el.requestFullscreen().catch(err=>{}); 
+                else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+                showOSD("📺 FULL"); 
+            } else { 
+                if (document.exitFullscreen) document.exitFullscreen(); 
+                else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+                showOSD("📺 EXIT"); 
+            } 
+        }
+
+        document.addEventListener('fullscreenchange', () => {
+            if (!document.fullscreenElement) document.body.classList.remove('is-fullscreen');
+            else document.body.classList.add('is-fullscreen');
+        });
+        document.addEventListener('webkitfullscreenchange', () => {
+            if (!document.webkitFullscreenElement) document.body.classList.remove('is-fullscreen');
+            else document.body.classList.add('is-fullscreen');
+        });
+
+        // --- CONTROLS ---
+        function togglePlay() { if(video.paused){video.play(); document.getElementById('playBtn').innerText="⏸"; showOSD("▶");} else{video.pause(); document.getElementById('playBtn').innerText="▶"; showOSD("⏸");} }
+        function seekVideo(v) { video.currentTime=v; updateProgressBar(); }
+        function adjSpeed(delta) {
+            let s = Math.max(0.1, Math.min(3.0, video.playbackRate + delta));
+            video.playbackRate = s; if(extAudio) extAudio.playbackRate = s;
+            document.getElementById('txtSpd').innerText = s.toFixed(1);
+            localStorage.setItem('vid_spd', s); showOSD("SPEED "+s.toFixed(1)+"x");
+        }
+        function adjVol(delta) {
+            let v = Math.max(0, Math.min(1.0, video.volume + delta));
+            video.volume = v; if(extAudio) extAudio.volume = v;
+            document.getElementById('txtVol').innerText = Math.round(v*100);
+            localStorage.setItem('vid_vol', v); showOSD("VOL "+Math.round(v*100)+"%");
+        }
+        
+        function toggleMute() {
+            video.muted = !video.muted;
+            const btn = document.getElementById('muteToggleBtn');
+            if(video.muted) { btn.innerText = "🔇 MUTED"; btn.classList.add('active'); showOSD("MUTED"); }
+            else { btn.innerText = "🔊 ON"; btn.classList.remove('active'); showOSD("UNMUTED"); }
+        }
+        
+        function loadExtAudio(i) {
+            if(i.files[0]) {
+                extAudio.src = URL.createObjectURL(i.files[0]);
+                extAudio.currentTime = video.currentTime;
+                extAudio.playbackRate = video.playbackRate;
+                extAudio.volume = video.volume;
+                document.getElementById('extAudioBtn').classList.add('active');
+                showOSD("EXT AUDIO LOADED");
+                if(!video.muted) toggleMute(); // Auto mute video
+                if(!video.paused) extAudio.play();
+            }
+        }
+        function stepFrame(v) { video.pause(); video.currentTime+=v; showOSD("FRAME"); }
+        function fmt(s) { let m=Math.floor(s/60),sc=Math.floor(s%60); return `${m}:${sc.toString().padStart(2,'0')}`; }
+        function showOSD(t) { osd.innerText=t; osd.classList.add('show'); clearTimeout(osdTimer); osdTimer=setTimeout(()=>osd.classList.remove('show'),1000); }
+        
+        video.ontimeupdate = () => { if(!video.duration) return; updateProgressBar(); if (isLooping && loopB !== null && video.currentTime >= loopB) { video.currentTime = loopA; if(video.paused) video.play(); } };
+        video.onloadedmetadata = () => { pBar.max = video.duration; document.getElementById('timeDur').innerText = fmt(video.duration); applyVisuals(); };
+        video.onwaiting = () => loader.style.display = 'block';
+        video.onplaying = () => { loader.style.display = 'none'; requestWakeLock(); document.getElementById('placeholder').style.display='none'; };
+        video.onpause = () => { if(wakeLock) wakeLock.release(); };
+        window.addEventListener('resize', () => { requestAnimationFrame(applyVisuals); });
+
+        // FILE HANDLING
+        function dropHandler(ev) { ev.preventDefault(); document.getElementById('dropOverlay').classList.remove('active'); if (ev.dataTransfer.items) [...ev.dataTransfer.items].forEach(item => { if (item.kind==='file') { const f = item.getAsFile(); playFile(f); } }); }
+        function dragOverHandler(ev) { ev.preventDefault(); document.getElementById('dropOverlay').classList.add('active'); }
+        function dragLeaveHandler(ev) { ev.preventDefault(); document.getElementById('dropOverlay').classList.remove('active'); }
+        function playFile(f) { video.src = URL.createObjectURL(f); resetTransform(); video.play(); }
+        function loadFile(i) { if(i.files[0]) playFile(i.files[0]); }
+        
+        function setLoopA() { loopA = video.currentTime; document.getElementById('btnA').classList.add('active'); showOSD("A SET"); updateLoopVisuals(); }
+        function setLoopB() { loopB = video.currentTime; document.getElementById('btnB').classList.add('active'); isLooping=true; video.currentTime=loopA; video.play(); showOSD("LOOP ON"); updateLoopVisuals(); }
+        function clearLoop() { loopA=null; loopB=null; isLooping=false; document.getElementById('btnA').classList.remove('active'); document.getElementById('btnB').classList.remove('active'); updateLoopVisuals(); showOSD("LOOP OFF"); }
+        function updateLoopVisuals() { const markA=document.getElementById('markA'), markB=document.getElementById('markB'), hl=document.getElementById('loopHighlight'); markA.style.display=loopA!==null?'block':'none'; if(loopA) markA.style.left=(loopA/video.duration)*100+'%'; markB.style.display=loopB!==null?'block':'none'; if(loopB) markB.style.left=(loopB/video.duration)*100+'%'; hl.style.display=(loopA!==null&&loopB!==null)?'block':'none'; if(loopA&&loopB){ hl.style.left=(loopA/video.duration)*100+'%'; hl.style.width=((loopB-loopA)/video.duration)*100+'%'; } }
+
+        let it; function wake() { document.body.classList.remove('user-inactive'); clearTimeout(it); if(document.fullscreenElement) it=setTimeout(()=>document.body.classList.add('user-inactive'),2000); }
+        document.onmousemove=wake; 
+        document.onkeydown=e=>{ 
+            wake(); 
+            if(e.target.tagName!=='INPUT') switch(e.code){ 
+                case 'Space':case 'KeyK':e.preventDefault();togglePlay();break; 
+                case 'KeyF':e.preventDefault();toggleFullscreen();break; 
+                case 'ArrowRight':e.preventDefault();video.currentTime+=5;showOSD("+5s");break; 
+                case 'ArrowLeft':e.preventDefault();video.currentTime-=5;showOSD("-5s");break; 
+                case 'ArrowUp':e.preventDefault();adjVol(0.1);break;
+                case 'ArrowDown':e.preventDefault();adjVol(-0.1);break;
+            } 
+        };
+
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then(reg => console.log('SW registered!', reg))
+                    .catch(err => console.error('SW registration failed', err));
+            });
+        }
+    </script>
+</body>
+</html>
