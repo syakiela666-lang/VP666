@@ -201,7 +201,7 @@
         video.addEventListener('ratechange', () => { if(extAudio.src) extAudio.playbackRate = video.playbackRate; });
         
         // State originX/Y sekarang menyimpan koordinat PIXEL bukan persen, untuk akurasi transform
-        let state = { rot: 0, flipH: 1, flipV: 1, zoom: 1, panX: 0, panY: 0, originX: '50%', originY: '50%', clip: 'none', cropMeta: null };
+        let state = { rot: 0, flipH: 1, flipV: 1, zoom: 1, panX: 0, panY: 0, originX: '50%', originY: '50%', clip: 'none', cropMeta: null, fitZoom: 1 };
         let osdTimer;
         let loopA = null, loopB = null, isLooping = false;
         let renderPending = false; 
@@ -260,7 +260,7 @@
                 const dx = e.touches[0].clientX - touchStart.x;
                 const dy = e.touches[0].clientY - touchStart.y;
                 
-                if (state.zoom > 1) {
+                if (state.zoom > state.fitZoom + 0.01) {
                     isMoving = true;
                     const dxPct = (dx / viewport.clientWidth) * 100;
                     const dyPct = (dy / viewport.clientHeight) * 100;
@@ -421,6 +421,7 @@
             const hPct = box.height / rect.height;
             state.cropMeta = { wPct, hPct };
             state.zoom = Math.min(1 / wPct, 1 / hPct); // Reset Zoom to this new fit
+            state.fitZoom = state.zoom;
 
             // 4. Reset Rotation to 0 (Fresh Start for new crop)
             state.rot = 0;
@@ -459,7 +460,7 @@
 
         function updateTransform(t,v) { if(t==='rot') state.rot+=v; if(t==='flipH') state.flipH*=v; if(t==='flipV') state.flipV*=v; if(t==='zoom') state.zoom+=v; requestRender(); showOSD("GEO CHANGE"); }
         function resetTransform() { 
-            state={...state, rot:0, flipH:1, flipV:1, zoom:1, panX:0, panY:0, originX:'50%', originY:'50%', clip:'none', cropMeta:null}; 
+            state={...state, rot:0, flipH:1, flipV:1, zoom:1, panX:0, panY:0, originX:'50%', originY:'50%', clip:'none', cropMeta:null, fitZoom:1}; 
             requestRender(); showOSD("RESET VIEW"); 
         }
         function updateColor(t,v) { state[t]=v; requestRender(); }
