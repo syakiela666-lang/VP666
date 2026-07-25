@@ -160,21 +160,7 @@
                     <button class="btn" onclick="clearLoop()">❌</button>
                     <button class="btn" onclick="toggleFullscreen()" title="Full (F)">⛶</button>
                 </div>
-                <div class="slider-stack">
-                    <div class="slider-row">
-                        <span>Spd</span> 
-                        <div style="display:flex; gap:4px; flex:1; justify-content:flex-end; align-items:center;">
-                            <button class="btn" onclick="adjSpeed(-0.1)" style="width:36px;">-</button>
-                            <span id="txtSpd" style="width:36px; text-align:center; font-size:1.1em; font-family:monospace; color:var(--cyan);">1.0</span>
-                            <button class="btn" onclick="adjSpeed(0.1)" style="width:36px;">+</button>
-                        </div>
-                    </div>
-                    <div class="slider-row">
-                        <span>Vol</span> 
-                        <input type="range" class="tweak" id="slVol" min="0" max="1" step="0.05" value="1" oninput="setVol(this.value)" style="flex:1; margin:0 8px;">
-                        <span id="txtVol" style="width:36px; text-align:right; font-size:1.1em; font-family:monospace; color:var(--cyan);">100</span>
-                    </div>
-                </div>
+
             </div>
 
             <div class="module">
@@ -247,17 +233,19 @@
         pBar.addEventListener('mouseleave', () => { hoverTime.style.display = 'none'; });
 
         // --- GESTURES ---
-        let touchStart = { x: 0, y: 0, d: 0 };
-        let startState = { zoom: 1, panX: 0, panY: 0 };
+        let touchStart = { x: 0, y: 0, d: 0, action: null };
+        let startState = { zoom: 1, panX: 0, panY: 0, vol: 1, spd: 1 };
         let isTouching = false; let isMoving = false; let lastTapTime = 0;
 
         viewport.addEventListener('touchstart', (e) => {
             if(cropMode) return;
-            isTouching = true; isMoving = false;
+            isTouching = true; isMoving = false; touchStart.action = null;
             video.classList.add('no-anim'); 
             if (e.touches.length === 1) {
                 touchStart.x = e.touches[0].clientX; touchStart.y = e.touches[0].clientY;
                 startState.panX = state.panX; startState.panY = state.panY;
+                startState.vol = video.volume;
+                startState.spd = video.playbackRate;
             } else if (e.touches.length === 2) {
                 touchStart.d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
                 startState.zoom = state.zoom;
@@ -267,11 +255,40 @@
         viewport.addEventListener('touchmove', (e) => {
             if(cropMode || !isTouching) return;
             e.preventDefault();
-            if (e.touches.length === 1 && state.zoom > 1) { 
-                isMoving = true;
-                state.panX = startState.panX + (e.touches[0].clientX - touchStart.x);
-                state.panY = startState.panY + (e.touches[0].clientY - touchStart.y);
-                requestRender();
+            if (e.touches.length === 1) { 
+                const dx = e.touches[0].clientX - touchStart.x;
+                const dy = e.touches[0].clientY - touchStart.y;
+                
+                if (state.zoom > 1) {
+                    isMoving = true;
+                    state.panX = startState.panX + dx;
+                    state.panY = startState.panY + dy;
+                    requestRender();
+                } else {
+                    if (!touchStart.action && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
+                        isMoving = true;
+                        const rect = viewport.getBoundingClientRect();
+                        if (Math.abs(dy) > Math.abs(dx)) {
+                            touchStart.action = (touchStart.x > rect.left + rect.width / 2) ? 'volume' : 'speed';
+                        } else {
+                            touchStart.action = 'seek';
+                        }
+                    }
+
+                    if (touchStart.action === 'volume') {
+                        const deltaVol = -(dy / viewport.clientHeight) * 1.5;
+                        let v = Math.max(0, Math.min(1.0, startState.vol + deltaVol));
+                        video.volume = v; if(extAudio) extAudio.volume = v;
+                        showOSD("VOL "+Math.round(v*100)+"%");
+                        localStorage.setItem('vid_vol', v);
+                    } else if (touchStart.action === 'speed') {
+                        const deltaSpd = -(dy / viewport.clientHeight) * 2; 
+                        let s = Math.max(0.1, Math.min(3.0, startState.spd + deltaSpd));
+                        video.playbackRate = s; if(extAudio) extAudio.playbackRate = s;
+                        showOSD("SPEED "+s.toFixed(1)+"x");
+                        localStorage.setItem('vid_spd', s);
+                    }
+                }
             } else if (e.touches.length === 2) {
                 isMoving = true;
                 const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
