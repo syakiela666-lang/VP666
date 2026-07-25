@@ -234,7 +234,7 @@
 
         // --- GESTURES ---
         let touchStart = { x: 0, y: 0, d: 0, action: null };
-        let startState = { zoom: 1, panX: 0, panY: 0, vol: 1, spd: 1 };
+        let startState = { zoom: 1, panX: 0, panY: 0, vol: 1, spd: 1, time: 0 };
         let isTouching = false; let isMoving = false; let lastTapTime = 0;
 
         viewport.addEventListener('touchstart', (e) => {
@@ -246,6 +246,7 @@
                 startState.panX = state.panX; startState.panY = state.panY;
                 startState.vol = video.volume;
                 startState.spd = video.playbackRate;
+                startState.time = video.currentTime;
             } else if (e.touches.length === 2) {
                 touchStart.d = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
                 startState.zoom = state.zoom;
@@ -287,6 +288,12 @@
                         video.playbackRate = s; if(extAudio) extAudio.playbackRate = s;
                         showOSD("SPEED "+s.toFixed(1)+"x");
                         localStorage.setItem('vid_spd', s);
+                    } else if (touchStart.action === 'seek') {
+                        const deltaSec = (dx / viewport.clientWidth) * 120;
+                        let t = Math.max(0, Math.min(video.duration || 0, startState.time + deltaSec));
+                        video.currentTime = t;
+                        updateProgressBar();
+                        showOSD(`${deltaSec > 0 ? '+' : ''}${Math.round(deltaSec)}s [${fmt(t)}]`);
                     }
                 }
             } else if (e.touches.length === 2) {
@@ -411,6 +418,7 @@
             state.panY = screenCenterY - state.originY;
 
             // 3. Zoom Calculation
+            state.cropMeta = { w: box.width, h: box.height };
             const newZoom = Math.min(rect.width / box.width, rect.height / box.height);
             state.zoom = newZoom; // Reset Zoom to this new fit
 
@@ -431,15 +439,20 @@
             
             // Auto-fit if rotated 90 or 270 degrees
             if (Math.abs(state.rot % 180) === 90 && video.videoWidth) {
-                const vw = video.videoWidth;
-                const vh = video.videoHeight;
                 const cw = viewport.clientWidth || 1;
                 const ch = viewport.clientHeight || 1;
                 
-                const s0 = Math.min(cw / vw, ch / vh);       // Default scale by object-fit
-                const sRot = Math.min(cw / vh, ch / vw);     // Target scale for rotated bounds
-                
-                finalZoom *= (sRot / s0); 
+                if (state.clip !== 'none' && state.cropMeta) {
+                    const z0 = Math.min(cw / state.cropMeta.w, ch / state.cropMeta.h);
+                    const zRot = Math.min(cw / state.cropMeta.h, ch / state.cropMeta.w);
+                    finalZoom *= (zRot / z0);
+                } else {
+                    const vw = video.videoWidth;
+                    const vh = video.videoHeight;
+                    const s0 = Math.min(cw / vw, ch / vh);       // Default scale by object-fit
+                    const sRot = Math.min(cw / vh, ch / vw);     // Target scale for rotated bounds
+                    finalZoom *= (sRot / s0); 
+                }
             }
             
             // Translate moves the Origin to the Center. Rotate spins around Origin. Scale expands from Origin.
