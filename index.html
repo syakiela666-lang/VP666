@@ -262,8 +262,10 @@
                 
                 if (state.zoom > 1) {
                     isMoving = true;
-                    state.panX = startState.panX + dx;
-                    state.panY = startState.panY + dy;
+                    const dxPct = (dx / viewport.clientWidth) * 100;
+                    const dyPct = (dy / viewport.clientHeight) * 100;
+                    state.panX = startState.panX + dxPct;
+                    state.panY = startState.panY + dyPct;
                     requestRender();
                 } else {
                     if (!touchStart.action && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
@@ -399,28 +401,26 @@
             const r = Math.max(0, (vRect.right - box.right) / vRect.width * 100);
             state.clip = `inset(${t}% ${r}% ${b}% ${l}%)`;
             
-            // 2. DEAD CENTER MATHEMATICS
+            // 2. PERCENTAGE-BASED MATHEMATICS (Resolution Independent)
             // Find Center of Selection relative to the Element (Screen)
             const boxCenterX = box.left + box.width / 2;
             const boxCenterY = box.top + box.height / 2;
             
-            // This point becomes our Transform Origin
-            state.originX = boxCenterX - rect.left; // x position in element
-            state.originY = boxCenterY - rect.top;  // y position in element
+            // This point becomes our Transform Origin as a percentage
+            const originXPct = ((boxCenterX - rect.left) / rect.width) * 100;
+            const originYPct = ((boxCenterY - rect.top) / rect.height) * 100;
+            state.originX = originXPct + "%";
+            state.originY = originYPct + "%";
             
-            // Calculate how much we need to move this Origin to get it to the Screen Center
-            const screenCenterX = rect.width / 2;
-            const screenCenterY = rect.height / 2;
-            
-            // Delta = Target - Current
-            // We set translation to this Delta so the Origin overlaps the Screen Center
-            state.panX = screenCenterX - state.originX;
-            state.panY = screenCenterY - state.originY;
+            // To overlap origin with screen center (50%), move it by (50 - origin)
+            state.panX = 50 - originXPct;
+            state.panY = 50 - originYPct;
 
             // 3. Zoom Calculation
-            state.cropMeta = { w: box.width, h: box.height };
-            const newZoom = Math.min(rect.width / box.width, rect.height / box.height);
-            state.zoom = newZoom; // Reset Zoom to this new fit
+            const wPct = box.width / rect.width;
+            const hPct = box.height / rect.height;
+            state.cropMeta = { wPct, hPct };
+            state.zoom = Math.min(1 / wPct, 1 / hPct); // Reset Zoom to this new fit
 
             // 4. Reset Rotation to 0 (Fresh Start for new crop)
             state.rot = 0;
@@ -430,10 +430,7 @@
 
         // --- VISUAL ENGINE ---
         function applyVisuals() {
-            // Apply Dynamic Pivot
-            let ox = typeof state.originX === 'number' ? `${state.originX}px` : state.originX;
-            let oy = typeof state.originY === 'number' ? `${state.originY}px` : state.originY;
-            video.style.transformOrigin = `${ox} ${oy}`;
+            video.style.transformOrigin = `${state.originX} ${state.originY}`;
             
             let finalZoom = state.zoom; 
             
@@ -443,8 +440,8 @@
                 const ch = viewport.clientHeight || 1;
                 
                 if (state.clip !== 'none' && state.cropMeta) {
-                    const z0 = Math.min(cw / state.cropMeta.w, ch / state.cropMeta.h);
-                    const zRot = Math.min(cw / state.cropMeta.h, ch / state.cropMeta.w);
+                    const z0 = Math.min(1 / state.cropMeta.wPct, 1 / state.cropMeta.hPct);
+                    const zRot = Math.min((cw/ch) / state.cropMeta.hPct, (ch/cw) / state.cropMeta.wPct);
                     finalZoom *= (zRot / z0);
                 } else {
                     const vw = video.videoWidth;
@@ -456,7 +453,7 @@
             }
             
             // Translate moves the Origin to the Center. Rotate spins around Origin. Scale expands from Origin.
-            video.style.transform = `translate(${state.panX}px, ${state.panY}px) rotate(${state.rot}deg) scale(${finalZoom}) scaleX(${state.flipH}) scaleY(${state.flipV})`;
+            video.style.transform = `translate(${state.panX}%, ${state.panY}%) rotate(${state.rot}deg) scale(${finalZoom}) scaleX(${state.flipH}) scaleY(${state.flipV})`;
             video.style.clipPath = state.clip;
         }
 
