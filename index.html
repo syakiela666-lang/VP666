@@ -26,7 +26,6 @@
             width: 100%; height: 100%; object-fit: contain; 
             /* Origin akan di-override oleh JS saat cropping */
             transform-origin: center center; 
-            will-change: transform, clip-path; 
             /* Transisi halus saat reset, tapi instant saat drag */
             transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
         }
@@ -160,6 +159,10 @@
                     <button class="btn" onclick="clearLoop()">❌</button>
                     <button class="btn" onclick="toggleFullscreen()" title="Full (F)">⛶</button>
                 </div>
+                <div class="grid-buttons" style="margin-top: 2px;">
+                    <button class="btn" id="extAudioBtn" onclick="document.getElementById('audioInput').click()" title="Load Ext Audio">🎵 AUD</button>
+                    <button class="btn" onclick="unloadExtAudio()" title="Unload Ext Audio">🚫 AUD</button>
+                </div>
 
             </div>
 
@@ -172,7 +175,6 @@
                     <button class="btn" onclick="updateTransform('rot', 90)">↻</button>
                     <button class="btn" onclick="updateTransform('flipH', -1)">↔</button>
                     <button class="btn" onclick="updateTransform('flipV', -1)">↕</button>
-                    <button class="btn" id="extAudioBtn" onclick="document.getElementById('audioInput').click()" title="Load Ext Audio">🎵 AUD</button>
                 </div>
             </div>
         </div>
@@ -210,8 +212,8 @@
         // --- INIT ---
         window.onload = () => {
             try {
-                if(localStorage.getItem('vid_vol')) { const v = parseFloat(localStorage.getItem('vid_vol')); video.volume = v; document.getElementById('txtVol').innerText = Math.round(v*100); }
-                if(localStorage.getItem('vid_spd')) { const s = parseFloat(localStorage.getItem('vid_spd')); video.playbackRate = s; document.getElementById('txtSpd').innerText = s.toFixed(1); }
+                if(localStorage.getItem('vid_vol')) { const v = parseFloat(localStorage.getItem('vid_vol')); video.volume = v; }
+                if(localStorage.getItem('vid_spd')) { const s = parseFloat(localStorage.getItem('vid_spd')); video.playbackRate = s; }
             } catch(e) {}
         };
 
@@ -253,68 +255,77 @@
             }
         }, {passive: false});
 
+        let touchMoveAF;
         viewport.addEventListener('touchmove', (e) => {
             if(cropMode || !isTouching) return;
             e.preventDefault();
-            if (e.touches.length === 1) { 
-                const dx = e.touches[0].clientX - touchStart.x;
-                const dy = e.touches[0].clientY - touchStart.y;
-                
-                if (state.zoom > state.fitZoom + 0.01) {
-                    isMoving = true;
-                    const dxPct = (dx / viewport.clientWidth) * 100;
-                    const dyPct = (dy / viewport.clientHeight) * 100;
-                    state.panX = startState.panX + dxPct;
-                    state.panY = startState.panY + dyPct;
-                    requestRender();
-                } else {
-                    if (!touchStart.action && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
+            if (touchMoveAF) cancelAnimationFrame(touchMoveAF);
+            touchMoveAF = requestAnimationFrame(() => {
+                if (!isTouching) return;
+                if (e.touches.length === 1) { 
+                    const dx = e.touches[0].clientX - touchStart.x;
+                    const dy = e.touches[0].clientY - touchStart.y;
+                    
+                    if (state.zoom > state.fitZoom + 0.01) {
                         isMoving = true;
-                        const rect = viewport.getBoundingClientRect();
-                        if (Math.abs(dy) > Math.abs(dx)) {
-                            touchStart.action = (touchStart.x > rect.left + rect.width / 2) ? 'volume' : 'speed';
-                        } else {
-                            touchStart.action = 'seek';
+                        const dxPct = (dx / viewport.clientWidth) * 100;
+                        const dyPct = (dy / viewport.clientHeight) * 100;
+                        state.panX = startState.panX + dxPct;
+                        state.panY = startState.panY + dyPct;
+                        requestRender();
+                    } else {
+                        if (!touchStart.action && (Math.abs(dx) > 10 || Math.abs(dy) > 10)) {
+                            isMoving = true;
+                            const rect = viewport.getBoundingClientRect();
+                            if (Math.abs(dy) > Math.abs(dx)) {
+                                touchStart.action = (touchStart.x > rect.left + rect.width / 2) ? 'volume' : 'speed';
+                            } else {
+                                touchStart.action = 'seek';
+                            }
+                        }
+
+                        if (touchStart.action === 'volume') {
+                            const deltaVol = -(dy / viewport.clientHeight) * 1.5;
+                            let v = Math.max(0, Math.min(1.0, startState.vol + deltaVol));
+                            video.volume = v; if(extAudio) extAudio.volume = v;
+                            showOSD("VOL "+Math.round(v*100)+"%");
+                            localStorage.setItem('vid_vol', v);
+                        } else if (touchStart.action === 'speed') {
+                            const deltaSpd = -(dy / viewport.clientHeight) * 2; 
+                            let s = Math.max(0.1, Math.min(3.0, startState.spd + deltaSpd));
+                            video.playbackRate = s; if(extAudio) extAudio.playbackRate = s;
+                            showOSD("SPEED "+s.toFixed(1)+"x");
+                            localStorage.setItem('vid_spd', s);
+                        } else if (touchStart.action === 'seek') {
+                            const deltaSec = (dx / viewport.clientWidth) * 120;
+                            let t = Math.max(0, Math.min(video.duration || 0, startState.time + deltaSec));
+                            video.currentTime = t;
+                            updateProgressBar();
+                            showOSD(`${deltaSec > 0 ? '+' : ''}${Math.round(deltaSec)}s [${fmt(t)}]`);
                         }
                     }
-
-                    if (touchStart.action === 'volume') {
-                        const deltaVol = -(dy / viewport.clientHeight) * 1.5;
-                        let v = Math.max(0, Math.min(1.0, startState.vol + deltaVol));
-                        video.volume = v; if(extAudio) extAudio.volume = v;
-                        showOSD("VOL "+Math.round(v*100)+"%");
-                        localStorage.setItem('vid_vol', v);
-                    } else if (touchStart.action === 'speed') {
-                        const deltaSpd = -(dy / viewport.clientHeight) * 2; 
-                        let s = Math.max(0.1, Math.min(3.0, startState.spd + deltaSpd));
-                        video.playbackRate = s; if(extAudio) extAudio.playbackRate = s;
-                        showOSD("SPEED "+s.toFixed(1)+"x");
-                        localStorage.setItem('vid_spd', s);
-                    } else if (touchStart.action === 'seek') {
-                        const deltaSec = (dx / viewport.clientWidth) * 120;
-                        let t = Math.max(0, Math.min(video.duration || 0, startState.time + deltaSec));
-                        video.currentTime = t;
-                        updateProgressBar();
-                        showOSD(`${deltaSec > 0 ? '+' : ''}${Math.round(deltaSec)}s [${fmt(t)}]`);
-                    }
+                } else if (e.touches.length === 2) {
+                    isMoving = true;
+                    const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
+                    state.zoom = Math.max(1, startState.zoom * (dist / touchStart.d));
+                    requestRender(); showOSD("ZOOM " + state.zoom.toFixed(1) + "x");
                 }
-            } else if (e.touches.length === 2) {
-                isMoving = true;
-                const dist = Math.hypot(e.touches[0].clientX - e.touches[1].clientX, e.touches[0].clientY - e.touches[1].clientY);
-                state.zoom = Math.max(1, startState.zoom * (dist / touchStart.d));
-                requestRender(); showOSD("ZOOM " + state.zoom.toFixed(1) + "x");
-            }
+            });
         }, {passive: false});
 
+        let tapTimeout;
         viewport.addEventListener('touchend', (e) => {
             if(cropMode) return; isTouching = false; video.classList.remove('no-anim');
             if (!isMoving && e.changedTouches.length === 1) {
                 const now = new Date().getTime();
                 if (now - lastTapTime < 300) {
+                    clearTimeout(tapTimeout);
                     const rect = viewport.getBoundingClientRect();
                     if ((e.changedTouches[0].clientX - rect.left) < rect.width / 2) { seekRelative(-10); ripple('ripL'); } 
                     else { seekRelative(10); ripple('ripR'); }
-                } else { setTimeout(() => { if (now === lastTapTime) togglePlay(); }, 350); }
+                } else { 
+                    tapTimeout = setTimeout(() => { togglePlay(); }, 300); 
+                }
                 lastTapTime = now;
             }
         });
@@ -463,8 +474,7 @@
             state={...state, rot:0, flipH:1, flipV:1, zoom:1, panX:0, panY:0, originX:'50%', originY:'50%', clip:'none', cropMeta:null, fitZoom:1}; 
             requestRender(); showOSD("RESET VIEW"); 
         }
-        function updateColor(t,v) { state[t]=v; requestRender(); }
-        function resetColor() { state.bri=1; state.con=1; state.sat=1; requestRender(); }
+
 
         // --- UTILS ---
 
@@ -503,20 +513,16 @@
         function adjSpeed(delta) {
             let s = Math.max(0.1, Math.min(3.0, video.playbackRate + delta));
             video.playbackRate = s; if(extAudio) extAudio.playbackRate = s;
-            document.getElementById('txtSpd').innerText = s.toFixed(1);
             localStorage.setItem('vid_spd', s); showOSD("SPEED "+s.toFixed(1)+"x");
         }
         function adjVol(delta) {
             let v = Math.max(0, Math.min(1.0, video.volume + delta));
             video.volume = v; if(extAudio) extAudio.volume = v;
-            document.getElementById('txtVol').innerText = Math.round(v*100);
-            if(document.getElementById('slVol')) document.getElementById('slVol').value = v;
             localStorage.setItem('vid_vol', v); showOSD("VOL "+Math.round(v*100)+"%");
         }
         function setVol(v) {
             v = parseFloat(v);
             video.volume = v; if(extAudio) extAudio.volume = v;
-            document.getElementById('txtVol').innerText = Math.round(v*100);
             localStorage.setItem('vid_vol', v); showOSD("VOL "+Math.round(v*100)+"%");
         }
         
@@ -529,6 +535,7 @@
         
         function loadExtAudio(i) {
             if(i.files[0]) {
+                if (extAudio.src) URL.revokeObjectURL(extAudio.src);
                 extAudio.src = URL.createObjectURL(i.files[0]);
                 extAudio.currentTime = video.currentTime;
                 extAudio.playbackRate = video.playbackRate;
@@ -539,11 +546,28 @@
                 if(!video.paused) extAudio.play();
             }
         }
+        function unloadExtAudio() {
+            if (extAudio.src) URL.revokeObjectURL(extAudio.src);
+            extAudio.pause();
+            extAudio.removeAttribute('src');
+            extAudio.load();
+            document.getElementById('extAudioBtn').classList.remove('active');
+            showOSD("EXT AUDIO UNLOADED");
+        }
         function stepFrame(v) { video.pause(); video.currentTime+=v; showOSD("FRAME"); }
         function fmt(s) { let m=Math.floor(s/60),sc=Math.floor(s%60); return `${m}:${sc.toString().padStart(2,'0')}`; }
         function showOSD(t) { osd.innerText=t; osd.classList.add('show'); clearTimeout(osdTimer); osdTimer=setTimeout(()=>osd.classList.remove('show'),1000); }
         
-        video.ontimeupdate = () => { if(!video.duration) return; updateProgressBar(); if (isLooping && loopB !== null && video.currentTime >= loopB) { video.currentTime = loopA; if(video.paused) video.play(); } };
+        video.ontimeupdate = () => { 
+            if(!video.duration) return; 
+            updateProgressBar(); 
+            if (isLooping && loopB !== null && video.currentTime >= loopB) { 
+                video.currentTime = loopA; if(video.paused) video.play(); 
+            } 
+            if (extAudio.src && !video.paused && Math.abs(extAudio.currentTime - video.currentTime) > 0.1) {
+                extAudio.currentTime = video.currentTime;
+            }
+        };
         video.onloadedmetadata = () => { pBar.max = video.duration; document.getElementById('timeDur').innerText = fmt(video.duration); applyVisuals(); };
         video.onwaiting = () => loader.style.display = 'block';
         video.onplaying = () => { loader.style.display = 'none'; requestWakeLock(); document.getElementById('placeholder').style.display='none'; };
@@ -554,11 +578,21 @@
         function dropHandler(ev) { ev.preventDefault(); document.getElementById('dropOverlay').classList.remove('active'); if (ev.dataTransfer.items) [...ev.dataTransfer.items].forEach(item => { if (item.kind==='file') { const f = item.getAsFile(); playFile(f); } }); }
         function dragOverHandler(ev) { ev.preventDefault(); document.getElementById('dropOverlay').classList.add('active'); }
         function dragLeaveHandler(ev) { ev.preventDefault(); document.getElementById('dropOverlay').classList.remove('active'); }
-        function playFile(f) { video.src = URL.createObjectURL(f); resetTransform(); video.play(); }
+        function playFile(f) { 
+            if(video.src) URL.revokeObjectURL(video.src); 
+            video.src = URL.createObjectURL(f); 
+            resetTransform(); 
+            if(extAudio.src) unloadExtAudio();
+            video.play(); 
+        }
         function loadFile(i) { if(i.files[0]) playFile(i.files[0]); }
         
         function setLoopA() { loopA = video.currentTime; document.getElementById('btnA').classList.add('active'); showOSD("A SET"); updateLoopVisuals(); }
-        function setLoopB() { loopB = video.currentTime; document.getElementById('btnB').classList.add('active'); isLooping=true; video.currentTime=loopA; video.play(); showOSD("LOOP ON"); updateLoopVisuals(); }
+        function setLoopB() { 
+            if (loopA === null) { showOSD("SET A FIRST!"); return; }
+            if (video.currentTime <= loopA) { showOSD("B MUST BE AFTER A!"); return; }
+            loopB = video.currentTime; document.getElementById('btnB').classList.add('active'); isLooping=true; video.currentTime=loopA; video.play(); showOSD("LOOP ON"); updateLoopVisuals(); 
+        }
         function clearLoop() { loopA=null; loopB=null; isLooping=false; document.getElementById('btnA').classList.remove('active'); document.getElementById('btnB').classList.remove('active'); updateLoopVisuals(); showOSD("LOOP OFF"); }
         function updateLoopVisuals() { const markA=document.getElementById('markA'), markB=document.getElementById('markB'), hl=document.getElementById('loopHighlight'); markA.style.display=loopA!==null?'block':'none'; if(loopA) markA.style.left=(loopA/video.duration)*100+'%'; markB.style.display=loopB!==null?'block':'none'; if(loopB) markB.style.left=(loopB/video.duration)*100+'%'; hl.style.display=(loopA!==null&&loopB!==null)?'block':'none'; if(loopA&&loopB){ hl.style.left=(loopA/video.duration)*100+'%'; hl.style.width=((loopB-loopA)/video.duration)*100+'%'; } }
 
